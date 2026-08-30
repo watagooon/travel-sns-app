@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+/*
+ * Sortable.js (vuedraggable) の ghost-class / chosen-class / drag-class は
+ * classList.add() に単一トークンとして渡されるため、複数の Tailwind
+ * ユーティリティクラスをスペース区切りでそのまま渡すとエラーになる。
+ * そのため単一のクラス名にまとめて @apply する。
+ */
+.timeline-drag-ghost {
+  @apply opacity-40;
+}
+
+.timeline-drag-chosen {
+  @apply opacity-70 shadow-lg ring-2 ring-indigo-300 rounded-xl;
+}
+
+.timeline-drag-dragging {
+  cursor: grabbing !important;
+}

@@ -1,0 +1,25 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/api/*",
+      "/assets/*",
+      "/*.{png,jpg,jpeg,gif,svg,ico,webp,avif}",
+      "/*.{css,js,mjs,map}",
+      "/*.{json,txt,xml,webmanifest}",
+      "/*.{woff,woff2,ttf,otf}"
+    ]
+  },
+  "mimeTypes": {
+    ".json": "application/json",
+    ".webmanifest": "application/manifest+json"
+  },
+  "trailingSlash": "auto",
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  }
+}
+
+
