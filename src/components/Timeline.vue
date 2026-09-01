@@ -1,15 +1,17 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import draggable from 'vuedraggable'
+import { PlusIcon } from '@heroicons/vue/24/outline'
 import TimelineItem from './TimelineItem.vue'
+import TimelineItemForm from './TimelineItemForm.vue'
 
 const props = defineProps({
   items: {
     type: Array,
     required: true,
   },
-  // "edit"  : D&D による並び替え・インライン編集をすべて許可し、非公開ドキュメントも表示する（作成者専用の編集画面）
-  // "view"  : 表示専用。D&D は無効化し、isPrivate: true のドキュメントは DOM から除外する（一般公開の閲覧画面）
+  // "edit"  : D&D による並び替え・予定の追加/編集/削除をすべて許可し、非公開ドキュメントも表示する（作成者専用の編集画面）
+  // "view"  : 表示専用。D&D と編集操作は無効化し、isPrivate: true のドキュメントは DOM から除外する（一般公開の閲覧画面）
   mode: {
     type: String,
     default: 'view',
@@ -21,10 +23,9 @@ const emit = defineEmits(['open-document'])
 
 const isEditable = computed(() => props.mode === 'edit')
 
-// dayIndex ごとにグルーピングする。以後の並び替え・インライン編集は
-// この dayGroups (ローカルの reactive state) を直接書き換えることで
-// 「コンポーネント内のデータ(JSON配列)に即座に反映する」要件を満たす。
-// props.items はあくまで初期値(モックデータ)としてのみ使用する。
+// dayIndex ごとにグルーピングする。並び替え・追加・編集・削除はすべて
+// この dayGroups (ローカルの reactive state) を直接書き換えることで完結させる。
+// props.items はあくまで初期値(APIから取得した保存済みデータ)としてのみ使用する。
 function buildDayGroups(items) {
   const map = new Map()
   for (const item of items) {
@@ -73,19 +74,89 @@ function handleGroupChange(event, dayGroup) {
   }
 }
 
-// TimelineItem からのインライン編集 (時間 / タイトル) を反映する
-function applyItemUpdate({ id, field, value }) {
-  for (const dayGroup of dayGroups.value) {
-    const target = dayGroup.items.find((item) => item.id === id)
-    if (target) {
-      target[field] = value
-      break
-    }
-  }
+// --- 予定の追加/編集/削除モーダルの状態管理 ---
+const isFormOpen = ref(false)
+const editingDayGroup = ref(null) // 追加/編集対象がどの日に属するか
+const editingItemId = ref(null) // null = 追加モード, id = 編集モード
+
+const editingItem = computed(() => {
+  if (!editingItemId.value || !editingDayGroup.value) return null
+  return editingDayGroup.value.items.find((item) => item.id === editingItemId.value) ?? null
+})
+
+function openAddForm(dayGroup) {
+  editingDayGroup.value = dayGroup
+  editingItemId.value = null
+  isFormOpen.value = true
 }
 
-// 現在の並び順・編集内容を1つの配列に平坦化して返す。
-// D&D・インライン編集の結果はすべてこの Timeline 内の dayGroups に閉じているため、
+function openEditForm(item, dayGroup) {
+  editingDayGroup.value = dayGroup
+  editingItemId.value = item.id
+  isFormOpen.value = true
+}
+
+function closeForm() {
+  isFormOpen.value = false
+}
+
+const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
+
+// 予定が1件も無い (新規作成直後の旅程など) 状態から、最初の1日目を作成して
+// すぐに最初の予定を追加できるようにする。
+function addFirstDay() {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const bootstrapGroup = {
+    dayIndex: 1,
+    dayLabel: '1日目',
+    date: todayStr,
+    dayOfWeek: WEEKDAY_LABELS[new Date(todayStr).getDay()],
+    items: [],
+  }
+  dayGroups.value = [bootstrapGroup]
+  openAddForm(bootstrapGroup)
+}
+
+function handleFormSubmit(payload) {
+  if (editingItemId.value) {
+    // 編集: 既存アイテムのフィールドを上書き
+    const target = editingDayGroup.value.items.find((item) => item.id === editingItemId.value)
+    if (target) {
+      Object.assign(target, payload)
+    }
+  } else {
+    // 追加: 対象の日に新しいアイテムを追加し、時間順に並べ直す
+    const dayGroup = editingDayGroup.value
+    const newItem = {
+      id: crypto.randomUUID(),
+      date: dayGroup.date,
+      dayIndex: dayGroup.dayIndex,
+      dayLabel: dayGroup.dayLabel,
+      dayOfWeek: dayGroup.dayOfWeek,
+      time: payload.time,
+      category: payload.category,
+      title: payload.title,
+      description: payload.description,
+      location: { name: '', address: '', lat: null, lng: null },
+      documents: [],
+    }
+    dayGroup.items.push(newItem)
+    dayGroup.items.sort((a, b) => a.time.localeCompare(b.time))
+  }
+  closeForm()
+}
+
+function handleFormDelete() {
+  if (!editingItemId.value || !editingDayGroup.value) return
+  const dayGroup = editingDayGroup.value
+  const index = dayGroup.items.findIndex((item) => item.id === editingItemId.value)
+  if (index !== -1) {
+    dayGroup.items.splice(index, 1)
+  }
+  closeForm()
+}
+
+// 現在の並び順・追加/編集/削除の結果を1つの配列に平坦化して返す。
 // 親コンポーネント (EditView.vue) が「保存する」ボタン押下時に呼び出し、
 // PUT /api/trips/{id} へ送るペイロードを組み立てるのに使う。
 // (継続的な同期は行わず、必要なタイミングで能動的に取得する設計にすることで、
@@ -99,6 +170,25 @@ defineExpose({ getFlattenedItems })
 
 <template>
   <div class="space-y-8">
+    <!-- 予定が1件も無い場合 (新規作成直後など) -->
+    <div
+      v-if="dayGroups.length === 0 && isEditable"
+      class="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-16 text-center"
+    >
+      <p class="text-sm text-slate-400">まだ予定が登録されていません。</p>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+        @click="addFirstDay"
+      >
+        <PlusIcon class="h-4 w-4" aria-hidden="true" />
+        最初の予定を追加
+      </button>
+    </div>
+    <div v-else-if="dayGroups.length === 0" class="py-16 text-center text-sm text-slate-400">
+      予定はまだ登録されていません。
+    </div>
+
     <section v-for="dayGroup in dayGroups" :key="dayGroup.dayIndex">
       <!-- 日付ヘッダー -->
       <div class="sticky top-0 z-20 -mx-4 mb-4 bg-slate-50/90 px-4 py-2 backdrop-blur sm:mx-0 sm:rounded-lg sm:px-3">
@@ -143,10 +233,30 @@ defineExpose({ getFlattenedItems })
             :is-last="index === dayGroup.items.length - 1"
             :mode="mode"
             @open-document="emit('open-document', $event)"
-            @update-item="applyItemUpdate"
+            @edit-item="openEditForm(element, dayGroup)"
           />
         </template>
       </draggable>
+
+      <!-- この日の最後に「＋新しい予定を追加」ボタンを配置 -->
+      <button
+        v-if="isEditable"
+        type="button"
+        class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 py-3 text-sm font-medium text-slate-400 transition hover:border-indigo-300 hover:text-indigo-500"
+        @click="openAddForm(dayGroup)"
+      >
+        <PlusIcon class="h-4 w-4" aria-hidden="true" />
+        新しい予定を追加
+      </button>
     </section>
+
+    <TimelineItemForm
+      v-if="isEditable"
+      :open="isFormOpen"
+      :item="editingItem"
+      @submit="handleFormSubmit"
+      @delete="handleFormDelete"
+      @close="closeForm"
+    />
   </div>
 </template>
