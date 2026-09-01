@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+
+# SWA CLI
+swa-db-connections
 
 # Editor directories and files
 .vscode/*

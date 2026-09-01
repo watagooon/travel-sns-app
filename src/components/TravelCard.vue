@@ -57,9 +57,9 @@ function formatRange(start, end) {
           <span
             class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700"
           >
-            {{ trip.author.initial }}
+            {{ trip.author.avatarInitial }}
           </span>
-          <span class="truncate text-xs text-slate-500">{{ trip.author.name }}</span>
+          <span class="truncate text-xs text-slate-500">{{ trip.author.displayName }}</span>
         </div>
 
         <span class="flex shrink-0 items-center gap-1 text-xs text-slate-500">

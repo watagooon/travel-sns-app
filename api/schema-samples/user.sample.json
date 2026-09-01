@@ -1,0 +1,11 @@
+{
+  "id": "test-user-1",
+  "userId": "test-user-1",
+  "displayName": "テスト太郎",
+  "avatarInitial": "テ",
+  "avatarColor": "bg-indigo-100 text-indigo-700",
+  "bio": "開発用テストアカウントです。",
+  "provider": "github",
+  "createdAt": "2026-08-30T02:00:00.000Z",
+  "updatedAt": "2026-08-30T02:00:00.000Z"
+}

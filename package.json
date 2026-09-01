@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "swa": "swa start --config-name travel-sns",
+    "seed": "node scripts/seed-cosmos.mjs"
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
@@ -15,8 +17,11 @@
     "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
+    "@azure/cosmos": "^4.9.3",
+    "@azure/static-web-apps-cli": "^2.0.10",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-vue": "^6.0.8",
+    "dotenv": "^17.4.2",
     "tailwindcss": "^4.3.3",
     "vite": "^8.2.2"
   }

@@ -1,0 +1,36 @@
+{
+  "id": "seed-trip-1",
+  "userId": "test-user-1",
+  "title": "ソウル旅行 2泊3日",
+  "destination": "ソウル, 韓国",
+  "startDate": "2026-09-20",
+  "endDate": "2026-09-22",
+  "coverGradient": "from-sky-500 to-indigo-600",
+  "genreTags": ["弾丸トラベル", "グルメ", "夜景"],
+  "isPublic": true,
+  "likeCount": 12,
+  "author": {
+    "userId": "test-user-1",
+    "displayName": "テスト太郎",
+    "avatarInitial": "テ"
+  },
+  "items": [
+    {
+      "id": "seoul-d1-1",
+      "date": "2026-09-20",
+      "dayIndex": 1,
+      "dayLabel": "1日目",
+      "dayOfWeek": "日",
+      "time": "09:00",
+      "category": "flight",
+      "title": "関西国際空港発",
+      "description": "KE724便にて仁川国際空港へ出発。",
+      "location": { "name": "関西国際空港 第1ターミナル", "address": "大阪府泉佐野市泉州空港北1", "lat": 34.432, "lng": 135.2304 },
+      "documents": [
+        { "id": "doc-1", "label": "航空券Eチケット.pdf", "type": "pdf", "isPrivate": true }
+      ]
+    }
+  ],
+  "createdAt": "2026-08-30T02:00:00.000Z",
+  "updatedAt": "2026-08-30T02:00:00.000Z"
+}

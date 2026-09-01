@@ -83,6 +83,18 @@ function applyItemUpdate({ id, field, value }) {
     }
   }
 }
+
+// 現在の並び順・編集内容を1つの配列に平坦化して返す。
+// D&D・インライン編集の結果はすべてこの Timeline 内の dayGroups に閉じているため、
+// 親コンポーネント (EditView.vue) が「保存する」ボタン押下時に呼び出し、
+// PUT /api/trips/{id} へ送るペイロードを組み立てるのに使う。
+// (継続的な同期は行わず、必要なタイミングで能動的に取得する設計にすることで、
+//  props.items の watch とのフィードバックループを避けている)
+function getFlattenedItems() {
+  return dayGroups.value.flatMap((dayGroup) => dayGroup.items)
+}
+
+defineExpose({ getFlattenedItems })
 </script>
 
 <template>
