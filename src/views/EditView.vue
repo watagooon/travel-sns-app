@@ -35,7 +35,7 @@ const props = defineProps({
 
 const route = useRoute()
 const router = useRouter()
-const { isAuthenticated, isLoading: isAuthLoading, ready } = useAuth()
+const { isAuthenticated, isLoading: isAuthLoading, ready, loginUrl } = useAuth()
 const { fetchTripById, updateTrip, deleteTrip } = useTripsApi()
 
 // 招待URL (/edit/{id}?token=...) 経由でアクセスしてきた場合の editToken。
@@ -87,9 +87,20 @@ async function loadTrip() {
 
 onMounted(async () => {
   await ready()
-  if (isAuthenticated.value) {
-    loadTrip()
+
+  if (!isAuthenticated.value) {
+    // 共有URL (?token=...) 経由で未ログインの場合、「ログインしてください」画面を
+    // 挟まずそのままASWAのログイン画面へ誘導する。post_login_redirect_uri には
+    // 現在の token 付きURLがそのまま使われるため、ログイン完了後にこのページへ戻り、
+    // 戻ってきた際の GET /api/trips/{id} 呼び出しで collaboratorIds への
+    // 紐付け (ensureCollaborator) が行われる。
+    if (inviteToken.value) {
+      window.location.href = loginUrl('github')
+    }
+    return
   }
+
+  loadTrip()
 })
 
 // --- 簡易トースト通知 ---

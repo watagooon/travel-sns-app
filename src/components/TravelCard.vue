@@ -1,10 +1,16 @@
 <script setup>
 import { CameraIcon, HeartIcon } from '@heroicons/vue/24/solid'
+import { UserGroupIcon } from '@heroicons/vue/24/outline'
 
 defineProps({
   trip: {
     type: Object,
     required: true,
+  },
+  // true: 自分は作成者ではなく、共有URL経由で参加した共同編集者であることを示す
+  isCollaboration: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -36,6 +42,15 @@ function formatRange(start, end) {
         class="absolute left-3 top-3 rounded-full bg-black/30 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm"
       >
         {{ formatRange(trip.startDate, trip.endDate) }}
+      </span>
+
+      <!-- 自分が作成者ではなく、共有URL経由で参加している旅程であることを示すバッジ -->
+      <span
+        v-if="isCollaboration"
+        class="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-indigo-600/90 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-sm"
+      >
+        <UserGroupIcon class="h-3 w-3" aria-hidden="true" />
+        共同編集
       </span>
     </div>
 

@@ -60,10 +60,41 @@ async function resolveTripAccess(container, id, user, token) {
   return null
 }
 
+// 招待URL (editToken) 経由でアクセスしてきた同行者を、初回アクセス時に
+// collaboratorIds へ登録する。これにより、次回以降 GET /api/trips (一覧) にも
+// この旅程が「共同編集中」として表示されるようになる。
+//
+// 注意: collaboratorIds はあくまで「一覧に表示するための便宜的な参照リスト」であり、
+// アクセス許可そのものは (このリストへの登録有無に関わらず) editToken の一致で
+// 判定される。すでに登録済み、または呼び出し元が所有者本人の場合は何もしない。
+async function ensureCollaborator(container, trip, userId) {
+  const collaboratorIds = Array.isArray(trip.collaboratorIds) ? trip.collaboratorIds : []
+  if (trip.userId === userId || collaboratorIds.includes(userId)) {
+    return trip
+  }
+
+  const updated = {
+    ...trip,
+    collaboratorIds: [...collaboratorIds, userId],
+    updatedAt: new Date().toISOString(),
+  }
+  const { resource: saved } = await container.item(trip.id, trip.userId).replace(updated)
+  return saved
+}
+
 // GET /api/trips
-// ログイン中のユーザー自身が作成した旅行計画の一覧を取得する。
-// trips コンテナのパーティションキーが /userId のため、このクエリは
-// 単一パーティション内で完結し (クロスパーティションにならず) 低コストで実行できる。
+// ログイン中のユーザーが「所有者」または「共同編集者」のいずれかとして
+// 関わっている旅行計画の一覧を取得する。
+//
+// 【重要な設計トレードオフ】 trips コンテナのパーティションキーは /userId (所有者側) のため、
+// c.userId = @userId の部分だけなら単一パーティションのクエリで完結するが、
+// ARRAY_CONTAINS(c.collaboratorIds, @userId) は所有者のuserIdとは無関係な
+// (自分がパーティションキーに含まれない) ドキュメントも対象にする必要があるため、
+// OR で組み合わせたこのクエリ全体がクロスパーティション実行になる
+// (=Cosmos DBが全パーティションをスキャンする分、RU消費は増える)。
+// 個人〜小規模グループ利用の想定であれば許容範囲だが、大規模化する場合は
+// 「userId をパーティションキーに持つ "membership" 専用コンテナ」に
+// 所有者/共同編集者の関連を非正規化して持たせる設計に切り替えるのが望ましい。
 app.http('getTrips', {
   methods: ['GET'],
   route: 'trips',
@@ -78,7 +109,8 @@ app.http('getTrips', {
       const container = getContainer(CONTAINER_ID)
       const { resources: trips } = await container.items
         .query({
-          query: 'SELECT * FROM c WHERE c.userId = @userId ORDER BY c.updatedAt DESC',
+          query:
+            'SELECT * FROM c WHERE c.userId = @userId OR ARRAY_CONTAINS(c.collaboratorIds, @userId) ORDER BY c.updatedAt DESC',
           parameters: [{ name: '@userId', value: user.userId }],
         })
         .fetchAll()
@@ -96,6 +128,11 @@ app.http('getTrips', {
 // EditView.vue / PostDetailView.vue が特定の旅程を読み込む際に使用する。
 // クエリパラメータ token を付けて呼ぶと、作成者本人でなくても
 // (正しい editToken であれば) 同行者として閲覧・取得できる。
+//
+// 同行者としてのアクセスが確認できた場合、この呼び出しの中で
+// collaboratorIds への登録 (ensureCollaborator) まで行う。
+// これにより「共有URLを開いただけ」で、以後その人自身のホーム画面
+// (GET /api/trips 一覧) にもこの旅程が表示されるようになる。
 app.http('getTripById', {
   methods: ['GET'],
   route: 'trips/{id}',
@@ -116,7 +153,13 @@ app.http('getTripById', {
       if (!result) {
         return { status: 404, jsonBody: { error: '指定された旅程が見つかりません。' } }
       }
-      return { status: 200, jsonBody: result.trip }
+
+      let trip = result.trip
+      if (!result.isOwner) {
+        trip = await ensureCollaborator(container, trip, user.userId)
+      }
+
+      return { status: 200, jsonBody: trip }
     } catch (error) {
       context.error('旅程の取得に失敗しました', error)
       return { status: 500, jsonBody: { error: '旅程の取得に失敗しました。' } }
@@ -151,6 +194,7 @@ app.http('createTrip', {
         id: randomUUID(),
         userId: user.userId,
         editToken: randomUUID(),
+        collaboratorIds: [],
         title: body.title.trim(),
         destination: body.destination ?? '',
         startDate: body.startDate ?? null,

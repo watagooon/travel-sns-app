@@ -10,9 +10,16 @@ import AuthStatus from '../components/AuthStatus.vue'
 // 現状のAPI (GET /api/trips) は「ログイン中ユーザー自身の旅程一覧」を返す設計のため、
 // このフィードは "マイ旅のしおり" として振る舞う (全ユーザー横断の公開フィードにするには
 // 別途 GET /api/trips?scope=public のようなクロスパーティション用エンドポイントが必要)。
+// GET /api/trips は「自分が作成したもの」に加え、共有URL経由で参加した
+// 「共同編集中のもの」も含めて返すため、trip.userId と自分のuserIdを比較して
+// カード側に「共同編集」バッジを出し分ける。
 const router = useRouter()
-const { isAuthenticated, isLoading: isAuthLoading, ready } = useAuth()
+const { user, isAuthenticated, isLoading: isAuthLoading, ready } = useAuth()
 const { fetchMyTrips, createTrip } = useTripsApi()
+
+function isCollaboration(trip) {
+  return !!user.value && trip.userId !== user.value.userId
+}
 
 const trips = ref([])
 const isLoadingTrips = ref(false)
@@ -71,7 +78,7 @@ async function handleCreateTrip() {
         <div>
           <p class="text-xs font-semibold uppercase tracking-wide text-indigo-600">Travel SNS</p>
           <h1 class="mt-1 text-2xl font-bold text-slate-900 sm:text-3xl">マイ旅のしおり</h1>
-          <p class="mt-1 text-sm text-slate-500">あなたが作成した旅程の一覧です。</p>
+          <p class="mt-1 text-sm text-slate-500">あなたが作成した旅程と、共同編集に参加している旅程の一覧です。</p>
         </div>
         <div class="flex items-center gap-3">
           <button
@@ -124,7 +131,7 @@ async function handleCreateTrip() {
         - タブレット以上: 3〜4カラムまで広げる
       -->
       <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
-        <TravelCard v-for="trip in trips" :key="trip.id" :trip="trip" />
+        <TravelCard v-for="trip in trips" :key="trip.id" :trip="trip" :is-collaboration="isCollaboration(trip)" />
       </div>
     </main>
   </div>
