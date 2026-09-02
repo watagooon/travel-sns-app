@@ -4,11 +4,26 @@ import draggable from 'vuedraggable'
 import { PlusIcon } from '@heroicons/vue/24/outline'
 import TimelineItem from './TimelineItem.vue'
 import TimelineItemForm from './TimelineItemForm.vue'
+import { buildDateRange, formatShortDate } from '../utils/dateRange'
 
 const props = defineProps({
   items: {
     type: Array,
     required: true,
+  },
+  // 旅の基本情報 (メタデータ) の日程。この2つを起点に日付ブロックを生成する。
+  startDate: {
+    type: String,
+    default: null,
+  },
+  endDate: {
+    type: String,
+    default: null,
+  },
+  // 画像アップロード時に Blob のパスへ含める識別子
+  tripId: {
+    type: String,
+    default: null,
   },
   // "edit"  : D&D による並び替え・予定の追加/編集/削除をすべて許可し、非公開ドキュメントも表示する（作成者専用の編集画面）
   // "view"  : 表示専用。D&D と編集操作は無効化し、isPrivate: true のドキュメントは DOM から除外する（一般公開の閲覧画面）
@@ -23,27 +38,66 @@ const emit = defineEmits(['open-document'])
 
 const isEditable = computed(() => props.mode === 'edit')
 
-// dayIndex ごとにグルーピングする。並び替え・追加・編集・削除はすべて
-// この dayGroups (ローカルの reactive state) を直接書き換えることで完結させる。
-// props.items はあくまで初期値(APIから取得した保存済みデータ)としてのみ使用する。
-function buildDayGroups(items) {
+// startDate 〜 endDate から日付ブロックを組み立て、各アイテムを item.date で該当ブロックへ
+// 振り分ける。日程が未設定 (dateRange が空) の場合は、アイテムに残っている
+// dayIndex/date 情報から従来通りグルーピングするフォールバックを使う
+// (日程未入力のまま予定だけ先に登録したケースでもデータを失わないため)。
+// どちらにも属さない (日程変更でレンジ外になった) アイテムは「日程外の予定」としてまとめる。
+function buildDayGroups(items, startDate, endDate) {
+  const dateRange = buildDateRange(startDate, endDate)
+
+  if (dateRange.length === 0) {
+    return buildDayGroupsFromItemsOnly(items)
+  }
+
+  const itemsByDate = new Map()
+  for (const item of items) {
+    const key = item.date ?? ''
+    if (!itemsByDate.has(key)) itemsByDate.set(key, [])
+    itemsByDate.get(key).push({ ...item })
+  }
+
+  const groups = dateRange.map((day) => ({
+    ...day,
+    items: (itemsByDate.get(day.date) ?? []).sort((a, b) => a.time.localeCompare(b.time)),
+  }))
+
+  const matchedDates = new Set(dateRange.map((day) => day.date))
+  const orphanItems = items.filter((item) => !matchedDates.has(item.date)).map((item) => ({ ...item }))
+  if (orphanItems.length > 0) {
+    groups.push({
+      dayIndex: groups.length + 1,
+      dayLabel: '日程外の予定',
+      date: null,
+      dayOfWeek: '',
+      items: orphanItems,
+    })
+  }
+
+  return groups
+}
+
+// 日程 (startDate/endDate) が未設定のときのフォールバック: アイテム自身が持つ
+// dayIndex/date/dayLabel/dayOfWeek からグルーピングする (旧バージョンの挙動)。
+function buildDayGroupsFromItemsOnly(items) {
   const map = new Map()
   for (const item of items) {
-    if (!map.has(item.dayIndex)) {
-      map.set(item.dayIndex, {
-        dayIndex: item.dayIndex,
-        dayLabel: item.dayLabel,
-        date: item.date,
-        dayOfWeek: item.dayOfWeek,
+    const key = item.dayIndex ?? 1
+    if (!map.has(key)) {
+      map.set(key, {
+        dayIndex: key,
+        dayLabel: item.dayLabel ?? `${key}日目`,
+        date: item.date ?? null,
+        dayOfWeek: item.dayOfWeek ?? '',
         items: [],
       })
     }
-    map.get(item.dayIndex).items.push({ ...item })
+    map.get(key).items.push({ ...item })
   }
   return [...map.values()].sort((a, b) => a.dayIndex - b.dayIndex)
 }
 
-const dayGroups = ref(buildDayGroups(props.items))
+const dayGroups = ref(buildDayGroups(props.items, props.startDate, props.endDate))
 
 // /edit/:id や /posts/:id 間をルーター遷移した際、同じ Timeline インスタンスが
 // 使い回されて items だけ差し替わるケースに対応するため、props.items を監視して
@@ -51,14 +105,27 @@ const dayGroups = ref(buildDayGroups(props.items))
 watch(
   () => props.items,
   (newItems) => {
-    dayGroups.value = buildDayGroups(newItems)
+    dayGroups.value = buildDayGroups(newItems, props.startDate, props.endDate)
   },
 )
 
-function formatDate(dateStr) {
-  const d = new Date(dateStr)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
+// 旅の基本情報フォームで startDate/endDate をその場で編集した際、タイムラインの
+// 日付ブロック構成を即座に反映する。編集中 (未保存) のアイテムを失わないよう、
+// props.items ではなく「現在の dayGroups を平坦化したもの」を再分配し直す。
+watch(
+  () => [props.startDate, props.endDate],
+  () => {
+    const currentItems = dayGroups.value.flatMap((dayGroup) => dayGroup.items)
+    dayGroups.value = buildDayGroups(currentItems, props.startDate, props.endDate)
+  },
+)
+
+// 閲覧モードでは予定が1件も無い日をわざわざ表示しない (編集モードでは
+// 予定を追加できるよう、空の日でも常に表示する)。
+const visibleDayGroups = computed(() => {
+  if (isEditable.value) return dayGroups.value
+  return dayGroups.value.filter((dayGroup) => dayGroup.items.length > 0)
+})
 
 // 同じ日の中での並び替えは vuedraggable が v-model 経由で配列を直接
 // 書き換えてくれるだけで完結する。日をまたいで予定をドロップした場合は
@@ -100,23 +167,6 @@ function closeForm() {
   isFormOpen.value = false
 }
 
-const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
-
-// 予定が1件も無い (新規作成直後の旅程など) 状態から、最初の1日目を作成して
-// すぐに最初の予定を追加できるようにする。
-function addFirstDay() {
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const bootstrapGroup = {
-    dayIndex: 1,
-    dayLabel: '1日目',
-    date: todayStr,
-    dayOfWeek: WEEKDAY_LABELS[new Date(todayStr).getDay()],
-    items: [],
-  }
-  dayGroups.value = [bootstrapGroup]
-  openAddForm(bootstrapGroup)
-}
-
 function handleFormSubmit(payload) {
   if (editingItemId.value) {
     // 編集: 既存アイテムのフィールドを上書き
@@ -137,6 +187,7 @@ function handleFormSubmit(payload) {
       category: payload.category,
       title: payload.title,
       description: payload.description,
+      imageUrl: payload.imageUrl,
       location: { name: '', address: '', lat: null, lng: null },
       documents: [],
     }
@@ -170,26 +221,15 @@ defineExpose({ getFlattenedItems })
 
 <template>
   <div class="space-y-8">
-    <!-- 予定が1件も無い場合 (新規作成直後など) -->
-    <div
-      v-if="dayGroups.length === 0 && isEditable"
-      class="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-16 text-center"
-    >
-      <p class="text-sm text-slate-400">まだ予定が登録されていません。</p>
-      <button
-        type="button"
-        class="inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
-        @click="addFirstDay"
-      >
-        <PlusIcon class="h-4 w-4" aria-hidden="true" />
-        最初の予定を追加
-      </button>
+    <!-- 日程未設定 かつ 予定も無い場合 -->
+    <div v-if="dayGroups.length === 0 && isEditable" class="rounded-2xl border-2 border-dashed border-slate-200 py-16 text-center">
+      <p class="text-sm text-slate-400">上の「旅の基本情報」で日程 (開始日・終了日) を設定すると、<br class="hidden sm:inline" />タイムラインが自動的に生成されます。</p>
     </div>
     <div v-else-if="dayGroups.length === 0" class="py-16 text-center text-sm text-slate-400">
       予定はまだ登録されていません。
     </div>
 
-    <section v-for="dayGroup in dayGroups" :key="dayGroup.dayIndex">
+    <section v-for="dayGroup in visibleDayGroups" :key="dayGroup.dayIndex">
       <!-- 日付ヘッダー -->
       <div class="sticky top-0 z-20 -mx-4 mb-4 bg-slate-50/90 px-4 py-2 backdrop-blur sm:mx-0 sm:rounded-lg sm:px-3">
         <h2 class="flex items-baseline gap-2 text-sm font-bold text-slate-800">
@@ -199,7 +239,9 @@ defineExpose({ getFlattenedItems })
             {{ dayGroup.dayIndex }}
           </span>
           {{ dayGroup.dayLabel }}
-          <span class="font-normal text-slate-500">{{ formatDate(dayGroup.date) }}（{{ dayGroup.dayOfWeek }}）</span>
+          <span v-if="dayGroup.date" class="font-normal text-slate-500">
+            {{ formatShortDate(dayGroup.date) }}（{{ dayGroup.dayOfWeek }}）
+          </span>
         </h2>
       </div>
 
@@ -238,9 +280,9 @@ defineExpose({ getFlattenedItems })
         </template>
       </draggable>
 
-      <!-- この日の最後に「＋新しい予定を追加」ボタンを配置 -->
+      <!-- この日の最後に「＋新しい予定を追加」ボタンを配置 (「日程外の予定」バケツには出さない) -->
       <button
-        v-if="isEditable"
+        v-if="isEditable && dayGroup.date"
         type="button"
         class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 py-3 text-sm font-medium text-slate-400 transition hover:border-indigo-300 hover:text-indigo-500"
         @click="openAddForm(dayGroup)"
@@ -254,6 +296,7 @@ defineExpose({ getFlattenedItems })
       v-if="isEditable"
       :open="isFormOpen"
       :item="editingItem"
+      :trip-id="tripId"
       @submit="handleFormSubmit"
       @delete="handleFormDelete"
       @close="closeForm"

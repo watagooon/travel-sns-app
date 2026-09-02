@@ -202,7 +202,13 @@ function formatRange(start, end) {
         <!-- タイムライン(閲覧モード) + 地図 -->
         <div class="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_22rem] lg:grid-cols-[minmax(0,1fr)_26rem]">
           <section aria-label="旅程タイムライン">
-            <Timeline :items="trip.items" mode="view" @open-document="selectedDocument = $event" />
+            <Timeline
+              :items="trip.items"
+              :start-date="trip.startDate"
+              :end-date="trip.endDate"
+              mode="view"
+              @open-document="selectedDocument = $event"
+            />
           </section>
 
           <aside class="hidden md:block" aria-label="地図">

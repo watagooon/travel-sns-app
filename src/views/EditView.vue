@@ -1,17 +1,20 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   ArrowLeftIcon,
   CheckCircleIcon,
   EyeIcon,
   PencilSquareIcon,
   ExclamationTriangleIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
 import { useAuth } from '../composables/useAuth'
 import { useTripsApi } from '../composables/useTripsApi'
 import Timeline from '../components/Timeline.vue'
 import MapArea from '../components/MapArea.vue'
 import DocumentPreviewModal from '../components/DocumentPreviewModal.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import AuthStatus from '../components/AuthStatus.vue'
 
 // 本来はこの画面自体を router の navigation guard (beforeEnter) で
@@ -27,8 +30,9 @@ const props = defineProps({
   },
 })
 
+const router = useRouter()
 const { isAuthenticated, isLoading: isAuthLoading, ready } = useAuth()
-const { fetchTripById, updateTrip } = useTripsApi()
+const { fetchTripById, updateTrip, deleteTrip } = useTripsApi()
 
 const trip = ref(null)
 const isLoadingTrip = ref(false)
@@ -36,6 +40,8 @@ const loadError = ref('')
 const selectedDocument = ref(null)
 const timelineRef = ref(null)
 const isSaving = ref(false)
+const isDeleteDialogOpen = ref(false)
+const isDeleting = ref(false)
 
 // 旅の基本情報 (タイトル・目的地・日程) 用の編集フォーム。
 // trip 本体とは別の reactive オブジェクトにしておき、保存時にまとめて送信する。
@@ -106,6 +112,21 @@ async function handleSave() {
     showToast(`保存に失敗しました: ${error.message}`, 'error')
   } finally {
     isSaving.value = false
+  }
+}
+
+// 「この旅行計画を削除する」: ConfirmDialog で承認された後に実行される。
+// 取り消し不可の破壊的操作のため、確認ダイアログを必ず経由させる。
+async function handleDeleteTrip() {
+  isDeleting.value = true
+  try {
+    await deleteTrip(props.id)
+    router.push({ name: 'feed' })
+  } catch (error) {
+    isDeleteDialogOpen.value = false
+    showToast(`削除に失敗しました: ${error.message}`, 'error')
+  } finally {
+    isDeleting.value = false
   }
 }
 </script>
@@ -210,7 +231,15 @@ async function handleSave() {
         <!-- タイムライン(編集モード) + 地図 -->
         <div class="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_22rem] lg:grid-cols-[minmax(0,1fr)_26rem]">
           <section aria-label="旅程タイムライン(編集)">
-            <Timeline ref="timelineRef" :items="trip.items" mode="edit" @open-document="selectedDocument = $event" />
+            <Timeline
+              ref="timelineRef"
+              :items="trip.items"
+              :start-date="metaForm.startDate"
+              :end-date="metaForm.endDate"
+              :trip-id="trip.id"
+              mode="edit"
+              @open-document="selectedDocument = $event"
+            />
           </section>
 
           <aside class="hidden md:block" aria-label="地図">
@@ -219,6 +248,20 @@ async function handleSave() {
             </div>
           </aside>
         </div>
+
+        <!-- 危険な操作 -->
+        <section class="mt-10 rounded-2xl border border-rose-200 bg-rose-50/50 p-4 sm:p-5">
+          <h2 class="text-xs font-semibold uppercase tracking-wide text-rose-600">危険な操作</h2>
+          <p class="mt-1 text-sm text-rose-700">この旅行計画を削除すると、元に戻すことはできません。</p>
+          <button
+            type="button"
+            class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700"
+            @click="isDeleteDialogOpen = true"
+          >
+            <TrashIcon class="h-4 w-4" aria-hidden="true" />
+            この旅行計画を削除する
+          </button>
+        </section>
       </main>
 
       <!-- フローティング保存ボタン -->
@@ -250,6 +293,17 @@ async function handleSave() {
       </Transition>
 
       <DocumentPreviewModal :document="selectedDocument" @close="selectedDocument = null" />
+
+      <ConfirmDialog
+        :open="isDeleteDialogOpen"
+        title="旅行計画を削除しますか？"
+        :message="`「${metaForm.title || trip.title}」を削除します。この操作は取り消せません。`"
+        confirm-label="削除する"
+        danger
+        :confirming="isDeleting"
+        @close="isDeleteDialogOpen = false"
+        @confirm="handleDeleteTrip"
+      />
     </template>
   </div>
 </template>

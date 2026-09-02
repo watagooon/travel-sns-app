@@ -183,3 +183,33 @@ app.http('updateTrip', {
     }
   },
 })
+
+// DELETE /api/trips/{id}
+// 旅行計画そのものを完全に削除する。取り消し不可の破壊的操作。
+// PUT/GET と同じく、自分のuserIdをパーティションキーにした削除のため、
+// 他人の旅程を(idを知っていても)削除することはできない。
+app.http('deleteTrip', {
+  methods: ['DELETE'],
+  route: 'trips/{id}',
+  authLevel: 'anonymous',
+  handler: async (request, context) => {
+    const user = getUserInfo(request)
+    if (!user) {
+      return { status: 401, jsonBody: { error: 'ログインが必要です。' } }
+    }
+
+    const id = request.params.id
+
+    try {
+      const container = getContainer(CONTAINER_ID)
+      await container.item(id, user.userId).delete()
+      return { status: 204 }
+    } catch (error) {
+      if (error.code === 404) {
+        return { status: 404, jsonBody: { error: '指定された旅程が見つかりません、または削除権限がありません。' } }
+      }
+      context.error('旅程の削除に失敗しました', error)
+      return { status: 500, jsonBody: { error: '旅程の削除に失敗しました。' } }
+    }
+  },
+})

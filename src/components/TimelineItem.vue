@@ -103,6 +103,15 @@ function handleCardClick() {
       <h3 class="mt-1.5 px-1.5 text-base font-bold text-slate-900">{{ item.title }}</h3>
       <p v-if="item.description" class="mt-1 text-sm leading-relaxed text-slate-600">{{ item.description }}</p>
 
+      <!-- 添付写真 (Azure Blob Storage 上の画像URL) -->
+      <img
+        v-if="item.imageUrl"
+        :src="item.imageUrl"
+        alt=""
+        class="mt-3 h-40 w-full rounded-lg object-cover"
+        loading="lazy"
+      />
+
       <div v-if="hasLocation" class="mt-2 flex items-center gap-1 text-xs text-slate-500">
         <MapPinIcon class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span class="truncate">{{ item.location.name }}</span>
