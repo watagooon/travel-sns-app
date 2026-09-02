@@ -140,7 +140,16 @@ async function handleSave() {
 // クリップボードにコピーする。招待URLさえ知っていれば、リンクを受け取った人は
 // (自分自身のアカウントでログインした上で) 作成者と同じように編集・保存できる。
 async function handleInvite() {
-  if (!trip.value?.editToken) return
+  // editToken 追加前に作成された旅程は、サーバー側 (resolveTripAccess) が
+  // 次回アクセス時に自動発行して永続化する。まだ手元の trip に反映されていない
+  // 場合は、ここで再読み込みしてから続行する。
+  if (!trip.value?.editToken) {
+    await loadTrip()
+  }
+  if (!trip.value?.editToken) {
+    showToast('招待URLの発行に失敗しました。時間をおいて再度お試しください。', 'error')
+    return
+  }
 
   const inviteUrl = `${window.location.origin}/edit/${trip.value.id}?token=${trip.value.editToken}`
   try {

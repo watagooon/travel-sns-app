@@ -35,6 +35,15 @@ async function resolveTripAccess(container, id, user, token) {
   try {
     const { resource: owned } = await container.item(id, user.userId).read()
     if (owned) {
+      // 同行者招待機能を追加する前に作成された旅程には editToken が存在しない。
+      // 所有者本人がアクセスしてきたこのタイミングで発行し、その場で永続化しておく
+      // (専用のマイグレーションスクリプトを用意しない、遅延的な後方互換対応)。
+      if (!owned.editToken) {
+        owned.editToken = randomUUID()
+        owned.updatedAt = new Date().toISOString()
+        const { resource: healed } = await container.item(id, user.userId).replace(owned)
+        return { trip: healed, isOwner: true }
+      }
       return { trip: owned, isOwner: true }
     }
   } catch (error) {
