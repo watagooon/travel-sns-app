@@ -55,18 +55,30 @@ async function uploadImageFile(file, { tripId }) {
   return blobUrl
 }
 
+// 同行者の招待URL (/edit/{id}?token=...) 経由でアクセスしている場合、
+// token をクエリパラメータとして API へ引き継ぐ。
+function withToken(path, token) {
+  if (!token) return path
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}token=${encodeURIComponent(token)}`
+}
+
 export function useTripsApi() {
   return {
     // ログイン中ユーザー自身の旅程一覧
     fetchMyTrips: () => request('/api/trips'),
-    // 単一の旅程を取得 (自分が所有するものだけ。他人のidを渡しても404になる)
-    fetchTripById: (id) => request(`/api/trips/${encodeURIComponent(id)}`),
+    // 単一の旅程を取得。所有者本人、または正しい editToken を渡した同行者のみ取得できる
+    fetchTripById: (id, token) => request(withToken(`/api/trips/${encodeURIComponent(id)}`, token)),
     // 新規旅程の作成
     createTrip: (trip) => request('/api/trips', { method: 'POST', body: JSON.stringify(trip) }),
-    // 既存旅程の更新 (EditView の「保存する」ボタンから、items 配列などを丸ごと上書き)
-    updateTrip: (id, patch) =>
-      request(`/api/trips/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) }),
-    // 旅程そのものの削除 (取り消し不可)
+    // 既存旅程の更新 (EditView の「保存する」ボタンから、items 配列などを丸ごと上書き)。
+    // 所有者本人、または正しい editToken を渡した同行者のみ更新できる
+    updateTrip: (id, patch, token) =>
+      request(withToken(`/api/trips/${encodeURIComponent(id)}`, token), {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      }),
+    // 旅程そのものの削除 (取り消し不可・所有者本人のみ)
     deleteTrip: (id) => request(`/api/trips/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // 予定に添付する画像のアップロード (SAS発行 + Blob Storageへの直接PUT)
     uploadImageFile,

@@ -1,13 +1,16 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeftIcon,
+  ArrowPathIcon,
   CheckCircleIcon,
   EyeIcon,
+  LinkIcon,
   PencilSquareIcon,
   ExclamationTriangleIcon,
   TrashIcon,
+  UserGroupIcon,
 } from '@heroicons/vue/24/outline'
 import { useAuth } from '../composables/useAuth'
 import { useTripsApi } from '../composables/useTripsApi'
@@ -30,9 +33,21 @@ const props = defineProps({
   },
 })
 
+const route = useRoute()
 const router = useRouter()
 const { isAuthenticated, isLoading: isAuthLoading, ready } = useAuth()
 const { fetchTripById, updateTrip, deleteTrip } = useTripsApi()
+
+// 招待URL (/edit/{id}?token=...) 経由でアクセスしてきた場合の editToken。
+// 所有者本人が普通にアクセスした場合は undefined になる。
+const inviteToken = computed(() => {
+  const value = route.query.token
+  return typeof value === 'string' && value ? value : undefined
+})
+// 「同行者セッション」かどうか (=招待URL経由でのアクセス)。
+// 削除や招待URL発行など、所有者専用の操作をUI上でも隠すために使う
+// (バックエンド側でも同様の権限チェックを行っており、これはあくまでUI上の親切さ)。
+const isGuestSession = computed(() => !!inviteToken.value)
 
 const trip = ref(null)
 const isLoadingTrip = ref(false)
@@ -42,6 +57,8 @@ const timelineRef = ref(null)
 const isSaving = ref(false)
 const isDeleteDialogOpen = ref(false)
 const isDeleting = ref(false)
+const isReloadDialogOpen = ref(false)
+const isReloading = ref(false)
 
 // 旅の基本情報 (タイトル・目的地・日程) 用の編集フォーム。
 // trip 本体とは別の reactive オブジェクトにしておき、保存時にまとめて送信する。
@@ -56,7 +73,7 @@ async function loadTrip() {
   isLoadingTrip.value = true
   loadError.value = ''
   try {
-    trip.value = await fetchTripById(props.id)
+    trip.value = await fetchTripById(props.id, inviteToken.value)
     metaForm.title = trip.value.title ?? ''
     metaForm.destination = trip.value.destination ?? ''
     metaForm.startDate = trip.value.startDate ?? ''
@@ -99,19 +116,54 @@ async function handleSave() {
   isSaving.value = true
   try {
     const items = timelineRef.value.getFlattenedItems()
-    const saved = await updateTrip(props.id, {
-      title: metaForm.title.trim(),
-      destination: metaForm.destination.trim(),
-      startDate: metaForm.startDate || null,
-      endDate: metaForm.endDate || null,
-      items,
-    })
+    const saved = await updateTrip(
+      props.id,
+      {
+        title: metaForm.title.trim(),
+        destination: metaForm.destination.trim(),
+        startDate: metaForm.startDate || null,
+        endDate: metaForm.endDate || null,
+        items,
+      },
+      inviteToken.value,
+    )
     trip.value = saved
     showToast('保存しました。')
   } catch (error) {
     showToast(`保存に失敗しました: ${error.message}`, 'error')
   } finally {
     isSaving.value = false
+  }
+}
+
+// 「同行者を招待する」: この旅程の editToken を使った編集用URLを組み立て、
+// クリップボードにコピーする。招待URLさえ知っていれば、リンクを受け取った人は
+// (自分自身のアカウントでログインした上で) 作成者と同じように編集・保存できる。
+async function handleInvite() {
+  if (!trip.value?.editToken) return
+
+  const inviteUrl = `${window.location.origin}/edit/${trip.value.id}?token=${trip.value.editToken}`
+  try {
+    await navigator.clipboard.writeText(inviteUrl)
+    showToast('招待URLをコピーしました。')
+  } catch {
+    showToast('クリップボードへのコピーに失敗しました。', 'error')
+  }
+}
+
+// 「最新データを再読み込み」: 同行者が裏で編集したかもしれない最新の内容を
+// 取得し直し、画面を上書きする。ローカルの未保存の変更は失われるため、
+// 実行前に必ず確認ダイアログを挟む。
+async function handleReload() {
+  isReloading.value = true
+  try {
+    await loadTrip()
+    isReloadDialogOpen.value = false
+    if (!loadError.value) {
+      showToast('最新のデータを読み込みました。')
+    }
+  } finally {
+    isReloading.value = false
   }
 }
 
@@ -162,12 +214,43 @@ async function handleDeleteTrip() {
           </RouterLink>
 
           <div class="min-w-0 flex-1">
-            <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
-              <PencilSquareIcon class="h-3.5 w-3.5" aria-hidden="true" />
-              編集モード
-            </span>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                <PencilSquareIcon class="h-3.5 w-3.5" aria-hidden="true" />
+                編集モード
+              </span>
+              <span
+                v-if="isGuestSession"
+                class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
+              >
+                <UserGroupIcon class="h-3.5 w-3.5" aria-hidden="true" />
+                同行者として編集中
+              </span>
+            </div>
             <h1 class="mt-1 truncate text-lg font-bold text-slate-900">{{ metaForm.title || '無題の旅程' }}</h1>
           </div>
+
+          <!-- 最新データを再読み込み: 同行者が裏で編集したかもしれない内容を取り込む -->
+          <button
+            type="button"
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100"
+            aria-label="最新データを再読み込み"
+            title="最新データを再読み込み"
+            @click="isReloadDialogOpen = true"
+          >
+            <ArrowPathIcon class="h-5 w-5" aria-hidden="true" />
+          </button>
+
+          <!-- 同行者を招待する: 所有者のみ (招待URL経由のセッションでは表示しない) -->
+          <button
+            v-if="!isGuestSession"
+            type="button"
+            class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-200"
+            @click="handleInvite"
+          >
+            <LinkIcon class="h-4 w-4" aria-hidden="true" />
+            同行者を招待する
+          </button>
 
           <RouterLink
             :to="{ name: 'post-detail', params: { id: trip.id } }"
@@ -249,8 +332,8 @@ async function handleDeleteTrip() {
           </aside>
         </div>
 
-        <!-- 危険な操作 -->
-        <section class="mt-10 rounded-2xl border border-rose-200 bg-rose-50/50 p-4 sm:p-5">
+        <!-- 危険な操作 (所有者のみ。同行者セッションでは削除権限自体がAPI側でも許可されないため隠す) -->
+        <section v-if="!isGuestSession" class="mt-10 rounded-2xl border border-rose-200 bg-rose-50/50 p-4 sm:p-5">
           <h2 class="text-xs font-semibold uppercase tracking-wide text-rose-600">危険な操作</h2>
           <p class="mt-1 text-sm text-rose-700">この旅行計画を削除すると、元に戻すことはできません。</p>
           <button
@@ -303,6 +386,16 @@ async function handleDeleteTrip() {
         :confirming="isDeleting"
         @close="isDeleteDialogOpen = false"
         @confirm="handleDeleteTrip"
+      />
+
+      <ConfirmDialog
+        :open="isReloadDialogOpen"
+        title="最新データを読み込みますか？"
+        message="同行者が編集した最新の内容を取得します。保存していない変更がある場合は失われます。"
+        confirm-label="読み込む"
+        :confirming="isReloading"
+        @close="isReloadDialogOpen = false"
+        @confirm="handleReload"
       />
     </template>
   </div>
