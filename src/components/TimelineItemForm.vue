@@ -1,11 +1,21 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { PhotoIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import {
+  CalendarDaysIcon,
+  PaperAirplaneIcon,
+  PhotoIcon,
+  TrashIcon,
+  TruckIcon,
+  XMarkIcon,
+} from '@heroicons/vue/24/outline'
 import { CATEGORY_META } from '../utils/categoryMeta'
 import { useTripsApi } from '../composables/useTripsApi'
 
 // 予定の「追加」「編集」を1つのモーダルフォームで兼ねる。
 // item が null なら追加モード、オブジェクトが渡されれば編集モード(削除ボタンも表示)。
+//
+// item.type ("activity" | "flight" | "transit") によって入力項目が切り替わる。
+// 旧データ (type 未設定) は "activity" として安全にフォールバックする。
 const props = defineProps({
   open: {
     type: Boolean,
@@ -26,16 +36,30 @@ const emit = defineEmits(['submit', 'delete', 'close'])
 
 const { uploadImageFile } = useTripsApi()
 
-const categoryOptions = Object.entries(CATEGORY_META).map(([value, meta]) => ({ value, label: meta.label }))
+// カテゴリ選択 (通常の予定のときだけ表示) からは flight/transfer を除外する。
+// これらは type セレクタ (通常の予定/フライト/移動) 側で表現するため、
+// 二重に選ばせて矛盾したデータになるのを防ぐ。
+const categoryOptions = Object.entries(CATEGORY_META)
+  .filter(([value]) => value !== 'flight' && value !== 'transfer')
+  .map(([value, meta]) => ({ value, label: meta.label }))
+
+const typeOptions = [
+  { value: 'activity', label: '通常の予定', icon: CalendarDaysIcon },
+  { value: 'flight', label: 'フライト', icon: PaperAirplaneIcon },
+  { value: 'transit', label: '移動', icon: TruckIcon },
+]
 
 const isEditMode = computed(() => !!props.item)
+const isTransitType = computed(() => form.value.type === 'flight' || form.value.type === 'transit')
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
 const form = ref(createEmptyForm())
 const titleError = ref('')
+const locationError = ref('')
 const isConfirmingDelete = ref(false)
 const titleInputRef = ref(null)
+const departureLocationInputRef = ref(null)
 
 // --- 画像アップロード ---
 // previewUrl: 選択直後にローカルで即表示するための objectURL
@@ -46,7 +70,17 @@ const isUploadingImage = ref(false)
 const uploadError = ref('')
 
 function createEmptyForm() {
-  return { time: '09:00', title: '', description: '', category: 'sightseeing' }
+  return {
+    type: 'activity',
+    time: '09:00',
+    title: '',
+    description: '',
+    category: 'sightseeing',
+    departureTime: '09:00',
+    arrivalTime: '11:00',
+    departureLocation: '',
+    arrivalLocation: '',
+  }
 }
 
 function revokePreview() {
@@ -56,7 +90,8 @@ function revokePreview() {
   }
 }
 
-// モーダルが開くたびに、編集対象の内容 (または空欄) をフォームへ反映する
+// モーダルが開くたびに、編集対象の内容 (または空欄) をフォームへ反映する。
+// item.type が無い (旧データ) 場合は 'activity' にフォールバックする。
 watch(
   () => props.open,
   async (isOpen) => {
@@ -67,20 +102,32 @@ watch(
     if (!isOpen) return
 
     titleError.value = ''
+    locationError.value = ''
     form.value = props.item
       ? {
-          time: props.item.time,
-          title: props.item.title,
+          type: props.item.type ?? 'activity',
+          time: props.item.time ?? '09:00',
+          title: props.item.title ?? '',
           description: props.item.description ?? '',
-          category: props.item.category,
+          category: props.item.category ?? 'sightseeing',
+          departureTime: props.item.departureTime ?? props.item.time ?? '09:00',
+          arrivalTime: props.item.arrivalTime ?? '',
+          departureLocation: props.item.departureLocation ?? '',
+          arrivalLocation: props.item.arrivalLocation ?? '',
         }
       : createEmptyForm()
     imageUrl.value = props.item?.imageUrl ?? ''
 
     await nextTick()
-    titleInputRef.value?.focus()
+    ;(isTransitType.value ? departureLocationInputRef.value : titleInputRef.value)?.focus()
   },
 )
+
+function selectType(type) {
+  form.value.type = type
+  titleError.value = ''
+  locationError.value = ''
+}
 
 onBeforeUnmount(revokePreview)
 
@@ -125,17 +172,56 @@ function removeImage() {
   uploadError.value = ''
 }
 
+// フライト/移動 と 通常の予定 とではフィールド構成が丸ごと異なるため、
+// 送信ペイロードには常に両方の項目キーを含めておく (未使用側は null)。
+// こうしておくことで、編集時に type を切り替えても Timeline.vue 側の
+// Object.assign(target, payload) だけで古いtype専用フィールドが残らず、
+// きれいに上書きされる。
 function handleSubmit() {
-  if (!form.value.title.trim()) {
-    titleError.value = 'タイトルを入力してください。'
+  if (form.value.type === 'activity') {
+    if (!form.value.title.trim()) {
+      titleError.value = 'タイトルを入力してください。'
+      return
+    }
+    emit('submit', {
+      type: 'activity',
+      time: form.value.time || '00:00',
+      title: form.value.title.trim(),
+      description: form.value.description.trim(),
+      category: form.value.category,
+      imageUrl: imageUrl.value || null,
+      departureTime: null,
+      arrivalTime: null,
+      departureLocation: null,
+      arrivalLocation: null,
+    })
     return
   }
+
+  const departureLocation = form.value.departureLocation.trim()
+  const arrivalLocation = form.value.arrivalLocation.trim()
+  if (!departureLocation || !arrivalLocation) {
+    locationError.value = '出発地点と到着地点を入力してください。'
+    return
+  }
+
+  const departureTime = form.value.departureTime || '00:00'
+  const arrivalTime = form.value.arrivalTime || departureTime
+
   emit('submit', {
-    time: form.value.time || '00:00',
-    title: form.value.title.trim(),
+    type: form.value.type,
+    // 通常の予定と同じ "time" フィールドにも出発時刻を反映しておくことで、
+    // Timeline.vue 側の時間順ソート (item.time) をtypeによらず共通ロジックのまま使える。
+    time: departureTime,
+    // タイトルは手入力させず、出発地点・到着地点から自動生成する。
+    title: `${departureLocation} → ${arrivalLocation}`,
     description: form.value.description.trim(),
-    category: form.value.category,
+    category: form.value.type === 'flight' ? 'flight' : 'transfer',
     imageUrl: imageUrl.value || null,
+    departureTime,
+    arrivalTime,
+    departureLocation,
+    arrivalLocation,
   })
 }
 
@@ -174,50 +260,126 @@ function handleDeleteClick() {
         </div>
 
         <form class="space-y-4 px-5 py-5" @submit.prevent="handleSubmit">
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="mb-1 block text-xs font-semibold text-slate-600">時間</label>
-              <input
-                v-model="form.time"
-                type="time"
-                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-xs font-semibold text-slate-600">カテゴリ</label>
-              <select
-                v-model="form.category"
-                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+          <!-- カテゴリ選択: 通常の予定 / フライト / 移動 -->
+          <div>
+            <label class="mb-1 block text-xs font-semibold text-slate-600">カテゴリ</label>
+            <div role="radiogroup" aria-label="予定の種類" class="grid grid-cols-3 gap-2">
+              <button
+                v-for="option in typeOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :aria-checked="form.type === option.value"
+                class="flex flex-col items-center gap-1 rounded-lg border px-2 py-2.5 text-xs font-semibold transition"
+                :class="
+                  form.type === option.value
+                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                    : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+                "
+                @click="selectType(option.value)"
               >
-                <option v-for="option in categoryOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
+                <component :is="option.icon" class="h-4 w-4" aria-hidden="true" />
+                {{ option.label }}
+              </button>
             </div>
           </div>
+
+          <!-- 通常の予定: 時間 / カテゴリ / タイトル -->
+          <template v-if="form.type === 'activity'">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="mb-1 block text-xs font-semibold text-slate-600">時間</label>
+                <input
+                  v-model="form.time"
+                  type="time"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-semibold text-slate-600">ジャンル</label>
+                <select
+                  v-model="form.category"
+                  class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                >
+                  <option v-for="option in categoryOptions" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-xs font-semibold text-slate-600">
+                タイトル <span class="text-rose-500">*</span>
+              </label>
+              <input
+                ref="titleInputRef"
+                v-model="form.title"
+                type="text"
+                placeholder="例: ホテルチェックイン"
+                class="w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2"
+                :class="titleError ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-100' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-100'"
+                @input="titleError = ''"
+              />
+              <p v-if="titleError" class="mt-1 text-xs text-rose-500">{{ titleError }}</p>
+            </div>
+          </template>
+
+          <!-- フライト / 移動: 出発・到着の時刻と地点 -->
+          <template v-else>
+            <div class="rounded-lg border border-slate-200 p-3">
+              <p class="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                <component :is="form.type === 'flight' ? PaperAirplaneIcon : TruckIcon" class="h-3.5 w-3.5" aria-hidden="true" />
+                出発
+              </p>
+              <div class="grid grid-cols-[7rem_1fr] gap-2">
+                <input
+                  v-model="form.departureTime"
+                  type="time"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <input
+                  ref="departureLocationInputRef"
+                  v-model="form.departureLocation"
+                  type="text"
+                  placeholder="例: 関西国際空港 (KIX)"
+                  class="w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2"
+                  :class="locationError ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-100' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-100'"
+                  @input="locationError = ''"
+                />
+              </div>
+
+              <div class="my-2 ml-[3px] h-3 border-l-2 border-dotted border-slate-300" aria-hidden="true" />
+
+              <p class="mb-2 text-xs font-semibold text-slate-500">到着</p>
+              <div class="grid grid-cols-[7rem_1fr] gap-2">
+                <input
+                  v-model="form.arrivalTime"
+                  type="time"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <input
+                  v-model="form.arrivalLocation"
+                  type="text"
+                  placeholder="例: 仁川国際空港 (ICN)"
+                  class="w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2"
+                  :class="locationError ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-100' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-100'"
+                  @input="locationError = ''"
+                />
+              </div>
+              <p v-if="locationError" class="mt-2 text-xs text-rose-500">{{ locationError }}</p>
+            </div>
+          </template>
 
           <div>
             <label class="mb-1 block text-xs font-semibold text-slate-600">
-              タイトル <span class="text-rose-500">*</span>
+              詳細メモ
+              <span v-if="isTransitType" class="font-normal text-slate-400">(便名・座席番号など)</span>
             </label>
-            <input
-              ref="titleInputRef"
-              v-model="form.title"
-              type="text"
-              placeholder="例: ホテルチェックイン"
-              class="w-full rounded-lg border px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2"
-              :class="titleError ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-100' : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-100'"
-              @input="titleError = ''"
-            />
-            <p v-if="titleError" class="mt-1 text-xs text-rose-500">{{ titleError }}</p>
-          </div>
-
-          <div>
-            <label class="mb-1 block text-xs font-semibold text-slate-600">詳細メモ</label>
             <textarea
               v-model="form.description"
               rows="3"
-              placeholder="持ち物や注意事項などがあればメモしておきましょう"
+              :placeholder="isTransitType ? '例: 大韓航空 KE722便 / 座席 12A' : '持ち物や注意事項などがあればメモしておきましょう'"
               class="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             />
           </div>

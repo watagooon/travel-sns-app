@@ -24,6 +24,11 @@ const props = defineProps({
 
 const emit = defineEmits(['open-document', 'edit-item'])
 
+// item.type が無い(=同機能を追加する前に作られた旧データ)場合は
+// "activity" (通常の予定) として安全にフォールバックする。
+const itemType = computed(() => props.item.type ?? 'activity')
+const isTransitType = computed(() => itemType.value === 'flight' || itemType.value === 'transit')
+
 const meta = computed(() => getCategoryMeta(props.item.category))
 const isEditable = computed(() => props.mode === 'edit')
 
@@ -41,6 +46,28 @@ const mapDeepLink = computed(() => {
   const { lat, lng, name } = props.item.location
   const query = encodeURIComponent(name)
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}(${query})`
+})
+
+// フライト/移動の所要時間を "1時間30分" のように計算する (到着が翌日にまたがる
+// 単純なケースにも簡易対応: 到着時刻 < 出発時刻 なら +24時間とみなす)。
+const duration = computed(() => {
+  if (!isTransitType.value) return ''
+  const { departureTime, arrivalTime } = props.item
+  if (!departureTime || !arrivalTime) return ''
+
+  const [depH, depM] = departureTime.split(':').map(Number)
+  const [arrH, arrM] = arrivalTime.split(':').map(Number)
+  if ([depH, depM, arrH, arrM].some((n) => Number.isNaN(n))) return ''
+
+  let minutes = arrH * 60 + arrM - (depH * 60 + depM)
+  if (minutes < 0) minutes += 24 * 60
+  if (minutes === 0) return ''
+
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (h === 0) return `${m}分`
+  if (m === 0) return `${h}時間`
+  return `${h}時間${m}分`
 })
 
 // 編集モードではカード本体のクリックで編集モーダルを開く。
@@ -78,7 +105,10 @@ function handleCardClick() {
     >
       <div class="flex items-start justify-between gap-2">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <span class="px-1.5 py-0.5 text-sm font-semibold tabular-nums text-slate-900">{{ item.time }}</span>
+          <!-- 通常の予定: 時間を表示 / フライト・移動: カテゴリバッジのみ (時間は下の出発/到着行に表示) -->
+          <span v-if="!isTransitType" class="px-1.5 py-0.5 text-sm font-semibold tabular-nums text-slate-900">
+            {{ item.time }}
+          </span>
           <span
             class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset"
             :class="meta.badge"
@@ -100,8 +130,33 @@ function handleCardClick() {
         </button>
       </div>
 
-      <h3 class="mt-1.5 px-1.5 text-base font-bold text-slate-900">{{ item.title }}</h3>
-      <p v-if="item.description" class="mt-1 text-sm leading-relaxed text-slate-600">{{ item.description }}</p>
+      <!-- フライト / 移動: 出発 → 到着 を1ブロックで表現する専用レイアウト -->
+      <div v-if="isTransitType" class="mt-2">
+        <div class="flex items-center gap-2">
+          <component :is="meta.icon" class="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+          <span class="text-sm font-semibold tabular-nums text-slate-900">{{ item.departureTime }}</span>
+          <span class="truncate text-sm text-slate-700">{{ item.departureLocation }}</span>
+        </div>
+
+        <div class="flex items-center gap-2 py-0.5 pl-[7px]">
+          <div class="h-4 w-px border-l-2 border-dotted border-slate-300" aria-hidden="true" />
+          <span v-if="duration" class="text-[11px] text-slate-400">所要時間: {{ duration }}</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <MapPinIcon class="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+          <span class="text-sm font-semibold tabular-nums text-slate-900">{{ item.arrivalTime }}</span>
+          <span class="truncate text-sm text-slate-700">{{ item.arrivalLocation }}</span>
+        </div>
+
+        <p v-if="item.description" class="mt-2 text-sm leading-relaxed text-slate-600">メモ: {{ item.description }}</p>
+      </div>
+
+      <!-- 通常の予定: タイトル + 詳細メモ -->
+      <template v-else>
+        <h3 class="mt-1.5 px-1.5 text-base font-bold text-slate-900">{{ item.title }}</h3>
+        <p v-if="item.description" class="mt-1 text-sm leading-relaxed text-slate-600">{{ item.description }}</p>
+      </template>
 
       <!-- 添付写真 (Azure Blob Storage 上の画像URL) -->
       <img

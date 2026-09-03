@@ -175,7 +175,10 @@ function handleFormSubmit(payload) {
       Object.assign(target, payload)
     }
   } else {
-    // 追加: 対象の日に新しいアイテムを追加し、時間順に並べ直す
+    // 追加: 対象の日に新しいアイテムを追加し、時間順に並べ直す。
+    // payload は type ("activity"|"flight"|"transit") に応じたフィールド一式
+    // (time/title/category や departureTime/arrivalLocation など) を丸ごと含んでいるため、
+    // そのままスプレッドするだけでどちらの種類にも対応できる。
     const dayGroup = editingDayGroup.value
     const newItem = {
       id: crypto.randomUUID(),
@@ -183,13 +186,9 @@ function handleFormSubmit(payload) {
       dayIndex: dayGroup.dayIndex,
       dayLabel: dayGroup.dayLabel,
       dayOfWeek: dayGroup.dayOfWeek,
-      time: payload.time,
-      category: payload.category,
-      title: payload.title,
-      description: payload.description,
-      imageUrl: payload.imageUrl,
       location: { name: '', address: '', lat: null, lng: null },
       documents: [],
+      ...payload,
     }
     dayGroup.items.push(newItem)
     dayGroup.items.sort((a, b) => a.time.localeCompare(b.time))
