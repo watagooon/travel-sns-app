@@ -196,6 +196,17 @@ function handleFormSubmit(payload) {
   closeForm()
 }
 
+// ToDoのチェック切り替え。TimelineItem.vue から渡された item は dayGroups 内の
+// 実オブジェクトそのもの (参照) なので、直接 isDone を反転させるだけで
+// リアクティブに反映される (ドラッグ時の movedItem 直接書き換えと同じパターン)。
+// 「保存する」を押すまでサーバーには反映されない、という既存の設計を踏襲する。
+function handleToggleTodo(item, todoId) {
+  const todo = item.todos?.find((t) => t.id === todoId)
+  if (todo) {
+    todo.isDone = !todo.isDone
+  }
+}
+
 function handleFormDelete() {
   if (!editingItemId.value || !editingDayGroup.value) return
   const dayGroup = editingDayGroup.value
@@ -275,6 +286,7 @@ defineExpose({ getFlattenedItems })
             :mode="mode"
             @open-document="emit('open-document', $event)"
             @edit-item="openEditForm(element, dayGroup)"
+            @toggle-todo="handleToggleTodo(element, $event)"
           />
         </template>
       </draggable>

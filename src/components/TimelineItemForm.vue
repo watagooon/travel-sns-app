@@ -4,6 +4,7 @@ import {
   CalendarDaysIcon,
   PaperAirplaneIcon,
   PhotoIcon,
+  PlusIcon,
   TrashIcon,
   TruckIcon,
   XMarkIcon,
@@ -34,7 +35,7 @@ const props = defineProps({
 
 const emit = defineEmits(['submit', 'delete', 'close'])
 
-const { uploadImageFile } = useTripsApi()
+const { uploadImages } = useTripsApi()
 
 // カテゴリ選択 (通常の予定のときだけ表示) からは flight/transfer を除外する。
 // これらは type セレクタ (通常の予定/フライト/移動) 側で表現するため、
@@ -52,7 +53,8 @@ const typeOptions = [
 const isEditMode = computed(() => !!props.item)
 const isTransitType = computed(() => form.value.type === 'flight' || form.value.type === 'transit')
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB / 枚
+const MAX_IMAGES = 10
 
 const form = ref(createEmptyForm())
 const titleError = ref('')
@@ -61,13 +63,31 @@ const isConfirmingDelete = ref(false)
 const titleInputRef = ref(null)
 const departureLocationInputRef = ref(null)
 
-// --- 画像アップロード ---
-// previewUrl: 選択直後にローカルで即表示するための objectURL
-// imageUrl  : アップロード完了後の Blob Storage 上のURL (これが実際に保存される値)
-const previewUrl = ref('')
-const imageUrl = ref('')
-const isUploadingImage = ref(false)
+// --- ToDoチェックリスト ---
+// { id, text, isDone } の配列。テキストは各行の <input> に直接 v-model しているため
+// 「修正」は自然に反映される。削除はゴミ箱アイコンでその場で配列から取り除く。
+const todos = ref([])
+const newTodoText = ref('')
+
+function addTodo() {
+  const text = newTodoText.value.trim()
+  if (!text) return
+  todos.value.push({ id: crypto.randomUUID(), text, isDone: false })
+  newTodoText.value = ''
+}
+
+function removeTodo(id) {
+  todos.value = todos.value.filter((todo) => todo.id !== id)
+}
+
+// --- 画像アップロード (複数枚) ---
+// images: [{ id, url, previewUrl, isUploading, error }]
+// - url        : アップロード完了後の Blob Storage 上のURL (これが実際に保存される値)
+// - previewUrl : 画面表示用 (アップロード中はローカルの objectURL、完了後は url と同じ)
+const images = ref([])
 const uploadError = ref('')
+
+const hasUploadingImages = computed(() => images.value.some((image) => image.isUploading))
 
 function createEmptyForm() {
   return {
@@ -83,10 +103,30 @@ function createEmptyForm() {
   }
 }
 
-function revokePreview() {
-  if (previewUrl.value) {
-    URL.revokeObjectURL(previewUrl.value)
-    previewUrl.value = ''
+// 既存アイテムの images (複数枚) をフォーム用の状態に変換する。
+// 旧データ (単一の imageUrl しか無い) は 1枚だけのギャラリーとして扱う後方互換フォールバック。
+function buildInitialImages(item) {
+  if (!item) return []
+  if (Array.isArray(item.images) && item.images.length > 0) {
+    return item.images.map((image) => ({
+      id: image.id,
+      url: image.url,
+      previewUrl: image.url,
+      isUploading: false,
+      error: '',
+    }))
+  }
+  if (item.imageUrl) {
+    return [{ id: crypto.randomUUID(), url: item.imageUrl, previewUrl: item.imageUrl, isUploading: false, error: '' }]
+  }
+  return []
+}
+
+function revokeAllPreviews() {
+  for (const image of images.value) {
+    if (image.previewUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(image.previewUrl)
+    }
   }
 }
 
@@ -96,7 +136,7 @@ watch(
   () => props.open,
   async (isOpen) => {
     isConfirmingDelete.value = false
-    revokePreview()
+    revokeAllPreviews()
     uploadError.value = ''
 
     if (!isOpen) return
@@ -116,7 +156,9 @@ watch(
           arrivalLocation: props.item.arrivalLocation ?? '',
         }
       : createEmptyForm()
-    imageUrl.value = props.item?.imageUrl ?? ''
+    todos.value = (props.item?.todos ?? []).map((todo) => ({ ...todo }))
+    newTodoText.value = ''
+    images.value = buildInitialImages(props.item)
 
     await nextTick()
     ;(isTransitType.value ? departureLocationInputRef.value : titleInputRef.value)?.focus()
@@ -129,19 +171,18 @@ function selectType(type) {
   locationError.value = ''
 }
 
-onBeforeUnmount(revokePreview)
+onBeforeUnmount(revokeAllPreviews)
 
-async function handleFileChange(event) {
-  const file = event.target.files?.[0]
+async function handleFilesChange(event) {
+  const selectedFiles = Array.from(event.target.files ?? [])
   event.target.value = '' // 同じファイルを連続選択しても change が発火するようにリセットしておく
-  if (!file) return
+  if (selectedFiles.length === 0) return
 
-  if (!file.type.startsWith('image/')) {
-    uploadError.value = '画像ファイルを選択してください。'
-    return
-  }
-  if (file.size > MAX_FILE_SIZE) {
-    uploadError.value = 'ファイルサイズは5MB以下にしてください。'
+  uploadError.value = ''
+
+  const remainingSlots = MAX_IMAGES - images.value.length
+  if (remainingSlots <= 0) {
+    uploadError.value = `写真は最大${MAX_IMAGES}枚までです。`
     return
   }
   if (!props.tripId) {
@@ -149,35 +190,89 @@ async function handleFileChange(event) {
     return
   }
 
-  uploadError.value = ''
-  revokePreview()
-  previewUrl.value = URL.createObjectURL(file)
-  isUploadingImage.value = true
+  const candidateFiles = selectedFiles.slice(0, remainingSlots)
+  if (selectedFiles.length > remainingSlots) {
+    uploadError.value = `写真は最大${MAX_IMAGES}枚までのため、一部を追加できませんでした。`
+  }
+
+  const validFiles = []
+  for (const file of candidateFiles) {
+    if (!file.type.startsWith('image/')) {
+      uploadError.value = '画像ファイルのみアップロードできます。'
+      continue
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      uploadError.value = `${file.name}: ファイルサイズは5MB以下にしてください。`
+      continue
+    }
+    validFiles.push(file)
+  }
+  if (validFiles.length === 0) return
+
+  // 選択直後にローカルプレビューを即表示しつつ、アップロード中フラグを立てる
+  const pendingImages = validFiles.map((file) => ({
+    id: crypto.randomUUID(),
+    file,
+    url: '',
+    previewUrl: URL.createObjectURL(file),
+    isUploading: true,
+    error: '',
+  }))
+  images.value.push(...pendingImages)
 
   try {
-    // 1) Azure Functions からアップロード用SAS URLを取得し
-    // 2) 取得したURLへブラウザから直接 Blob Storage へ PUT する (Functionは経由しない)
-    imageUrl.value = await uploadImageFile(file, { tripId: props.tripId })
+    // 複数ファイルを1回のリクエストでまとめてアップロードする
+    const uploadedUrls = await uploadImages(
+      pendingImages.map((image) => image.file),
+      { tripId: props.tripId },
+    )
+    // 注意: pendingImages が保持しているのは push 前の「素のオブジェクト」への参照。
+    // Vue の reactive() は配列に要素を追加した後、実際にリアクティブな変更検知を
+    // 効かせるにはリアクティブ配列 (images.value) 側を経由してミューテートする必要がある
+    // (素のオブジェクト参照を直接書き換えても、そのオブジェクトが reactive プロキシと
+    // 同一視される保証がなく、再描画がトリガーされないことがある)。
+    // そのため id で images.value から検索し直してから更新する。
+    pendingImages.forEach((pending, index) => {
+      const target = images.value.find((image) => image.id === pending.id)
+      if (target) {
+        target.url = uploadedUrls[index]
+        target.isUploading = false
+      }
+    })
   } catch (error) {
+    pendingImages.forEach((pending) => {
+      const target = images.value.find((image) => image.id === pending.id)
+      if (target) {
+        target.error = error.message
+        target.isUploading = false
+      }
+    })
     uploadError.value = error.message
-    revokePreview()
-  } finally {
-    isUploadingImage.value = false
   }
 }
 
-function removeImage() {
-  revokePreview()
-  imageUrl.value = ''
-  uploadError.value = ''
+function removeImage(id) {
+  const index = images.value.findIndex((image) => image.id === id)
+  if (index === -1) return
+  const [removed] = images.value.splice(index, 1)
+  if (removed.previewUrl?.startsWith('blob:')) {
+    URL.revokeObjectURL(removed.previewUrl)
+  }
 }
 
 // フライト/移動 と 通常の予定 とではフィールド構成が丸ごと異なるため、
 // 送信ペイロードには常に両方の項目キーを含めておく (未使用側は null)。
 // こうしておくことで、編集時に type を切り替えても Timeline.vue 側の
 // Object.assign(target, payload) だけで古いtype専用フィールドが残らず、
-// きれいに上書きされる。
+// きれいに上書きされる。todos / images はどちらの type でも共通して使う。
 function handleSubmit() {
+  const finalImages = images.value
+    .filter((image) => image.url && !image.isUploading)
+    .map((image) => ({ id: image.id, url: image.url }))
+  const finalTodos = todos.value
+    .map((todo) => ({ ...todo, text: todo.text.trim() }))
+    .filter((todo) => todo.text)
+
   if (form.value.type === 'activity') {
     if (!form.value.title.trim()) {
       titleError.value = 'タイトルを入力してください。'
@@ -189,7 +284,9 @@ function handleSubmit() {
       title: form.value.title.trim(),
       description: form.value.description.trim(),
       category: form.value.category,
-      imageUrl: imageUrl.value || null,
+      todos: finalTodos,
+      images: finalImages,
+      imageUrl: null, // 旧・単一画像フィールドは新しい images 配列に統合し、使わなくする
       departureTime: null,
       arrivalTime: null,
       departureLocation: null,
@@ -217,7 +314,9 @@ function handleSubmit() {
     title: `${departureLocation} → ${arrivalLocation}`,
     description: form.value.description.trim(),
     category: form.value.type === 'flight' ? 'flight' : 'transfer',
-    imageUrl: imageUrl.value || null,
+    todos: finalTodos,
+    images: finalImages,
+    imageUrl: null,
     departureTime,
     arrivalTime,
     departureLocation,
@@ -384,37 +483,91 @@ function handleDeleteClick() {
             />
           </div>
 
-          <!-- 写真アップロード -->
+          <!-- ToDoチェックリスト -->
           <div>
-            <label class="mb-1 block text-xs font-semibold text-slate-600">写真</label>
+            <label class="mb-1 block text-xs font-semibold text-slate-600">ToDoリスト</label>
 
-            <div v-if="previewUrl || imageUrl" class="relative inline-block">
-              <img :src="previewUrl || imageUrl" alt="" class="h-28 w-28 rounded-lg border border-slate-200 object-cover" />
-              <div v-if="isUploadingImage" class="absolute inset-0 flex items-center justify-center rounded-lg bg-white/70">
-                <svg class="h-5 w-5 animate-spin text-indigo-600" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                </svg>
+            <div v-if="todos.length" class="mb-2 space-y-1.5">
+              <div v-for="todo in todos" :key="todo.id" class="flex items-center gap-2">
+                <input
+                  v-model="todo.text"
+                  type="text"
+                  class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <button
+                  type="button"
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+                  aria-label="ToDoを削除"
+                  @click="removeTodo(todo.id)"
+                >
+                  <TrashIcon class="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
-              <button
-                v-else
-                type="button"
-                class="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-white shadow transition hover:bg-slate-700"
-                aria-label="写真を削除"
-                @click="removeImage"
-              >
-                <XMarkIcon class="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
             </div>
 
-            <label
-              v-else
-              class="flex h-28 w-28 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-indigo-300 hover:text-indigo-500"
-            >
-              <PhotoIcon class="h-6 w-6" aria-hidden="true" />
-              <span class="text-[11px]">写真を追加</span>
-              <input type="file" accept="image/*" class="hidden" @change="handleFileChange" />
+            <div class="flex items-center gap-2">
+              <input
+                v-model="newTodoText"
+                type="text"
+                placeholder="持ち物やタスクを入力してEnter"
+                class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                @keydown.enter.prevent="addTodo"
+              />
+              <button
+                type="button"
+                class="flex h-8 shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                @click="addTodo"
+              >
+                <PlusIcon class="h-3.5 w-3.5" aria-hidden="true" />
+                追加
+              </button>
+            </div>
+          </div>
+
+          <!-- 写真アップロード (複数枚) -->
+          <div>
+            <label class="mb-1 block text-xs font-semibold text-slate-600">
+              写真 <span class="font-normal text-slate-400">(最大{{ MAX_IMAGES }}枚)</span>
             </label>
+
+            <div class="grid grid-cols-3 gap-2">
+              <div
+                v-for="image in images"
+                :key="image.id"
+                class="relative aspect-square overflow-hidden rounded-lg border border-slate-200"
+              >
+                <img :src="image.previewUrl" alt="" class="h-full w-full object-cover" />
+                <div v-if="image.isUploading" class="absolute inset-0 flex items-center justify-center bg-white/70">
+                  <svg class="h-5 w-5 animate-spin text-indigo-600" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                </div>
+                <div
+                  v-else-if="image.error"
+                  class="absolute inset-0 flex items-center justify-center bg-rose-50/90 p-1 text-center text-[10px] font-semibold text-rose-600"
+                >
+                  失敗
+                </div>
+                <button
+                  type="button"
+                  class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-900/80 text-white transition hover:bg-slate-900"
+                  aria-label="この写真を削除"
+                  @click="removeImage(image.id)"
+                >
+                  <XMarkIcon class="h-3 w-3" aria-hidden="true" />
+                </button>
+              </div>
+
+              <label
+                v-if="images.length < MAX_IMAGES"
+                class="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-indigo-300 hover:text-indigo-500"
+              >
+                <PhotoIcon class="h-6 w-6" aria-hidden="true" />
+                <span class="text-[10px]">追加</span>
+                <input type="file" accept="image/*" multiple class="hidden" @change="handleFilesChange" />
+              </label>
+            </div>
 
             <p v-if="uploadError" class="mt-1 text-xs text-rose-500">{{ uploadError }}</p>
           </div>
@@ -442,7 +595,7 @@ function handleDeleteClick() {
               <button
                 type="submit"
                 class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="isUploadingImage"
+                :disabled="hasUploadingImages"
               >
                 {{ isEditMode ? '更新する' : '追加する' }}
               </button>

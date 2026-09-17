@@ -22,7 +22,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['open-document', 'edit-item'])
+const emit = defineEmits(['open-document', 'edit-item', 'toggle-todo'])
 
 // item.type が無い(=同機能を追加する前に作られた旧データ)場合は
 // "activity" (通常の予定) として安全にフォールバックする。
@@ -78,6 +78,38 @@ function handleCardClick() {
     emit('edit-item')
   }
 }
+
+// ToDoのチェックは編集モードのみ操作可能 (閲覧モードで触れても保存経路が無く
+// 変更がその場で消えてしまうため、あえて読み取り専用にしている)。
+// トグル自体はここでは行わず、親 (Timeline.vue) へ通知するだけ。
+// Timeline.vue 側が保持する dayGroups (reactive) 上の該当アイテムを書き換え、
+// 「保存する」を押すまでは Vue のステートだけで完結する既存の設計を踏襲する。
+function handleToggleTodo(todoId) {
+  if (!isEditable.value) return
+  emit('toggle-todo', todoId)
+}
+
+// 画像ギャラリー: item.images (複数枚) を優先し、無ければ旧・単一画像フィールド
+// (imageUrl) を1枚だけのギャラリーとして扱う後方互換フォールバック。
+const displayImages = computed(() => {
+  if (Array.isArray(props.item.images) && props.item.images.length > 0) {
+    return props.item.images
+  }
+  if (props.item.imageUrl) {
+    return [{ id: 'legacy-image', url: props.item.imageUrl }]
+  }
+  return []
+})
+
+const MAX_GALLERY_PREVIEW = 4
+const galleryPreviewImages = computed(() => displayImages.value.slice(0, MAX_GALLERY_PREVIEW))
+const galleryOverflowCount = computed(() => Math.max(0, displayImages.value.length - MAX_GALLERY_PREVIEW))
+const galleryColsClass = computed(() => {
+  const count = displayImages.value.length
+  if (count <= 1) return 'grid-cols-1'
+  if (count === 2) return 'grid-cols-2'
+  return 'grid-cols-3'
+})
 </script>
 
 <template>
@@ -158,14 +190,42 @@ function handleCardClick() {
         <p v-if="item.description" class="mt-1 text-sm leading-relaxed text-slate-600">{{ item.description }}</p>
       </template>
 
-      <!-- 添付写真 (Azure Blob Storage 上の画像URL) -->
-      <img
-        v-if="item.imageUrl"
-        :src="item.imageUrl"
-        alt=""
-        class="mt-3 h-40 w-full rounded-lg object-cover"
-        loading="lazy"
-      />
+      <!-- ToDoチェックリスト -->
+      <div v-if="item.todos?.length" class="mt-3 space-y-1" @click.stop>
+        <label
+          v-for="todo in item.todos"
+          :key="todo.id"
+          class="flex items-start gap-2 text-sm"
+          :class="isEditable ? 'cursor-pointer' : 'cursor-default'"
+        >
+          <input
+            type="checkbox"
+            :checked="todo.isDone"
+            :disabled="!isEditable"
+            class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400 disabled:cursor-not-allowed"
+            @change="handleToggleTodo(todo.id)"
+          />
+          <span :class="todo.isDone ? 'text-slate-400 line-through' : 'text-slate-700'">{{ todo.text }}</span>
+        </label>
+      </div>
+
+      <!-- 添付写真ギャラリー (Azure Blob Storage 上の画像URL、複数枚に対応) -->
+      <div v-if="displayImages.length > 0" class="mt-3 grid gap-1" :class="galleryColsClass">
+        <div
+          v-for="(image, index) in galleryPreviewImages"
+          :key="image.id"
+          class="relative overflow-hidden rounded-lg"
+          :class="displayImages.length === 1 ? 'aspect-video' : 'aspect-square'"
+        >
+          <img :src="image.url" alt="" loading="lazy" class="h-full w-full object-cover" />
+          <div
+            v-if="index === galleryPreviewImages.length - 1 && galleryOverflowCount > 0"
+            class="absolute inset-0 flex items-center justify-center bg-black/50 text-base font-bold text-white"
+          >
+            +{{ galleryOverflowCount }}
+          </div>
+        </div>
+      </div>
 
       <div v-if="hasLocation" class="mt-2 flex items-center gap-1 text-xs text-slate-500">
         <MapPinIcon class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

@@ -20,39 +20,26 @@ async function request(path, options = {}) {
   return res.json()
 }
 
-// 画像アップロード用のSAS URLをAzure Functionsから発行してもらう。
-// (Function自体は画像データを受け取らず、Blob Storageへの書き込み権限だけを短時間発行する)
-async function requestUploadUrl({ tripId, fileName, contentType }) {
-  return request('/api/upload-sas', {
-    method: 'POST',
-    body: JSON.stringify({ tripId, fileName, contentType }),
-  })
-}
-
-// 1) アップロード用SAS URLを取得 → 2) ブラウザから直接 Blob Storage へPUT する。
-// Functionのペイロードサイズ制限やコールドスタートの影響を受けず、画像バイナリは
-// Azure Storageへ直接送信されるため、Functions は仲介しない。
-async function uploadImageFile(file, { tripId }) {
-  const { uploadUrl, blobUrl } = await requestUploadUrl({
-    tripId,
-    fileName: file.name,
-    contentType: file.type,
-  })
-
-  const putResponse = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'x-ms-blob-type': 'BlockBlob',
-      'Content-Type': file.type,
-    },
-    body: file,
-  })
-
-  if (!putResponse.ok) {
-    throw new Error('画像のアップロードに失敗しました。')
+// 複数の画像ファイルを1回のリクエストで POST /api/upload (multipart/form-data) へ送信する。
+// ブラウザが自動でマルチパートの Content-Type (boundary付き) を設定してくれるよう、
+// 汎用の request() ヘルパー (Content-Type: application/json を強制する) は使わず、
+// ここだけ生の fetch を直接呼んでいる。
+async function uploadImages(files, { tripId }) {
+  const formData = new FormData()
+  formData.append('tripId', tripId)
+  for (const file of files) {
+    formData.append('files', file)
   }
 
-  return blobUrl
+  const res = await fetch('/api/upload', { method: 'POST', body: formData })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `画像のアップロードに失敗しました (HTTP ${res.status})`)
+  }
+
+  const { urls } = await res.json()
+  return urls
 }
 
 // 同行者の招待URL (/edit/{id}?token=...) 経由でアクセスしている場合、
@@ -80,8 +67,8 @@ export function useTripsApi() {
       }),
     // 旅程そのものの削除 (取り消し不可・所有者本人のみ)
     deleteTrip: (id) => request(`/api/trips/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    // 予定に添付する画像のアップロード (SAS発行 + Blob Storageへの直接PUT)
-    uploadImageFile,
+    // 予定に添付する画像を複数枚まとめてアップロードする (multipart/form-data)
+    uploadImages,
     // ログイン中ユーザーのSNSプロフィール (存在しなければAPI側で自動作成される)
     fetchMyProfile: () => request('/api/profile'),
   }
